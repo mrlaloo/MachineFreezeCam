@@ -28,52 +28,15 @@ jobs:
           s = s.replace('import android.os.Bundle;\n', 'import android.os.Build;\nimport android.os.Bundle;\n')
           s = s.replace('import android.view.Surface;\n', 'import android.view.Surface;\nimport android.view.WindowInsets;\n')
           s = s.replace('private Handler cameraHandler;\n', 'private Handler cameraHandler;\n    private int sensorRotationDegrees = 90;\n')
-          s = s.replace('root.setPadding(12, 12, 12, 12);', '''final int basePad = 12;
-        root.setPadding(basePad, basePad, basePad, basePad);
-        root.setOnApplyWindowInsetsListener((v, insets) -> {
-            int left, top, right, bottom;
-            if (Build.VERSION.SDK_INT >= 30) {
-                Insets bars = insets.getInsets(WindowInsets.Type.systemBars());
-                left = bars.left; top = bars.top; right = bars.right; bottom = bars.bottom;
-            } else {
-                left = insets.getSystemWindowInsetLeft(); top = insets.getSystemWindowInsetTop();
-                right = insets.getSystemWindowInsetRight(); bottom = insets.getSystemWindowInsetBottom();
-            }
-            v.setPadding(basePad + left, basePad + top, basePad + right, basePad + bottom);
-            return insets;
-        });''')
+          s = s.replace('root.setPadding(12, 12, 12, 12);', 'final int basePad = 12;\n        root.setPadding(basePad, basePad, basePad, basePad);\n        root.setOnApplyWindowInsetsListener((v, insets) -> {\n            int left, top, right, bottom;\n            if (Build.VERSION.SDK_INT >= 30) {\n                Insets bars = insets.getInsets(WindowInsets.Type.systemBars());\n                left = bars.left; top = bars.top; right = bars.right; bottom = bars.bottom;\n            } else {\n                left = insets.getSystemWindowInsetLeft(); top = insets.getSystemWindowInsetTop();\n                right = insets.getSystemWindowInsetRight(); bottom = insets.getSystemWindowInsetBottom();\n            }\n            v.setPadding(basePad + left, basePad + top, basePad + right, basePad + bottom);\n            return insets;\n        });')
           s = s.replace('presets.addView(b);', 'presets.addView(b, buttonParams());')
           s = s.replace('fine.addView(hold);', 'fine.addView(hold, buttonParams());')
           s = s.replace('parent.addView(b);', 'parent.addView(b, buttonParams());')
-          s = s.replace('    private void addAdjust(LinearLayout parent, String label, int amount) {', '''    private LinearLayout.LayoutParams buttonParams() {
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, 64, 1f);
-        lp.setMargins(3, 3, 3, 3);
-        return lp;
-    }
-
-    private void addAdjust(LinearLayout parent, String label, int amount) {''')
-          s = s.replace('if (facing != null && facing == CameraCharacteristics.LENS_FACING_BACK) { selected = id; break; }', '''if (facing != null && facing == CameraCharacteristics.LENS_FACING_BACK) {
-                    selected = id;
-                    Integer orientation = manager.getCameraCharacteristics(id).get(CameraCharacteristics.SENSOR_ORIENTATION);
-                    if (orientation != null) sensorRotationDegrees = orientation;
-                    break;
-                }''')
-          s = s.replace('if (bmp != null) runOnUiThread(() -> imageView.setImageBitmap(bmp));', '''if (bmp != null) {
-                            Bitmap display = rotateForPortrait(bmp);
-                            runOnUiThread(() -> imageView.setImageBitmap(display));
-                        }''')
-          marker = '    private void createSession() {'
-          helper = '''    private Bitmap rotateForPortrait(Bitmap source) {
-        if (source == null || sensorRotationDegrees == 0) return source;
-        Matrix matrix = new Matrix();
-        matrix.postRotate(sensorRotationDegrees);
-        Bitmap rotated = Bitmap.createBitmap(source, 0, 0, source.getWidth(), source.getHeight(), matrix, true);
-        if (rotated != source) source.recycle();
-        return rotated;
-    }
-
-'''
-          s = s.replace(marker, helper + marker)
+          s = s.replace('    private void addAdjust(LinearLayout parent, String label, int amount) {', '    private LinearLayout.LayoutParams buttonParams() {\n        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, 64, 1f);\n        lp.setMargins(3, 3, 3, 3);\n        return lp;\n    }\n\n    private void addAdjust(LinearLayout parent, String label, int amount) {')
+          s = s.replace('if (facing != null && facing == CameraCharacteristics.LENS_FACING_BACK) { selected = id; break; }', 'if (facing != null && facing == CameraCharacteristics.LENS_FACING_BACK) {\n                    selected = id;\n                    Integer orientation = manager.getCameraCharacteristics(id).get(CameraCharacteristics.SENSOR_ORIENTATION);\n                    if (orientation != null) sensorRotationDegrees = orientation;\n                    break;\n                }')
+          s = s.replace('if (bmp != null) runOnUiThread(() -> imageView.setImageBitmap(bmp));', 'if (bmp != null) {\n                            Bitmap display = rotateForPortrait(bmp);\n                            runOnUiThread(() -> imageView.setImageBitmap(display));\n                        }')
+          helper = '    private Bitmap rotateForPortrait(Bitmap source) {\n        if (source == null || sensorRotationDegrees == 0) return source;\n        Matrix matrix = new Matrix();\n        matrix.postRotate(sensorRotationDegrees);\n        Bitmap rotated = Bitmap.createBitmap(source, 0, 0, source.getWidth(), source.getHeight(), matrix, true);\n        if (rotated != source) source.recycle();\n        return rotated;\n    }\n\n'
+          s = s.replace('    private void createSession() {', helper + '    private void createSession() {')
           p.write_text(s)
           PY
       - name: Build debug APK
