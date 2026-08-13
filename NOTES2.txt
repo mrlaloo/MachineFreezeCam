@@ -1,0 +1,1 @@
+rotate portrait and pad system bars
