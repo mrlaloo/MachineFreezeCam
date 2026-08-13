@@ -2,6 +2,8 @@ name: Build APK v3
 
 on:
   workflow_dispatch:
+  push:
+    branches: [ main ]
 
 jobs:
   build:
