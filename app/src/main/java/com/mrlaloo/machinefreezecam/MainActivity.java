@@ -5,9 +5,12 @@ import android.app.Activity;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.graphics.Color;
 import android.graphics.ImageFormat;
 import android.graphics.Rect;
+import android.graphics.Typeface;
 import android.graphics.YuvImage;
+import android.graphics.drawable.GradientDrawable;
 import android.hardware.camera2.CameraAccessException;
 import android.hardware.camera2.CameraCaptureSession;
 import android.hardware.camera2.CameraCharacteristics;
@@ -22,6 +25,7 @@ import android.os.HandlerThread;
 import android.view.Gravity;
 import android.view.Surface;
 import android.widget.Button;
+import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
@@ -30,11 +34,14 @@ import android.widget.Toast;
 import java.io.ByteArrayOutputStream;
 import java.nio.ByteBuffer;
 import java.util.Arrays;
+import java.util.Locale;
 
 public class MainActivity extends Activity {
     private static final int CAMERA_PERMISSION = 10;
     private ImageView imageView;
-    private TextView rateText;
+    private TextView rpmText;
+    private TextView hzText;
+    private Button holdButton;
     private int fpm = 750;
     private volatile long lastShownNs = 0;
     private volatile boolean holdFrame = false;
@@ -47,59 +54,179 @@ public class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        getWindow().setStatusBarColor(Color.BLACK);
+        getWindow().setNavigationBarColor(Color.BLACK);
         buildUi();
-        if (checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
-            startCamera();
-        } else {
-            requestPermissions(new String[]{Manifest.permission.CAMERA}, CAMERA_PERMISSION);
-        }
+        if (checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) startCamera();
+        else requestPermissions(new String[]{Manifest.permission.CAMERA}, CAMERA_PERMISSION);
     }
 
     private void buildUi() {
-        LinearLayout root = new LinearLayout(this);
-        root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(12, 12, 12, 12);
-
-        rateText = new TextView(this);
-        rateText.setTextSize(24);
-        rateText.setGravity(Gravity.CENTER);
-        root.addView(rateText, new LinearLayout.LayoutParams(-1, -2));
+        FrameLayout root = new FrameLayout(this);
+        root.setBackgroundColor(Color.BLACK);
 
         imageView = new ImageView(this);
         imageView.setScaleType(ImageView.ScaleType.CENTER_CROP);
-        root.addView(imageView, new LinearLayout.LayoutParams(-1, 0, 1f));
+        imageView.setBackgroundColor(Color.rgb(18, 18, 18));
+        root.addView(imageView, new FrameLayout.LayoutParams(-1, -1));
 
-        LinearLayout presets = new LinearLayout(this);
-        presets.setGravity(Gravity.CENTER);
-        for (int p : new int[]{650, 700, 750, 800}) {
-            Button b = new Button(this);
-            b.setText(String.valueOf(p));
-            b.setOnClickListener(v -> setFpm(Integer.parseInt(((Button)v).getText().toString())));
-            presets.addView(b);
-        }
-        root.addView(presets);
+        TextView title = new TextView(this);
+        title.setText("Machine Freeze Cam");
+        title.setTextColor(Color.WHITE);
+        title.setTextSize(18);
+        title.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        title.setGravity(Gravity.CENTER_VERTICAL);
+        title.setPadding(dp(20), 0, 0, 0);
+        title.setBackground(round(0xB0000000, 0));
+        root.addView(title, new FrameLayout.LayoutParams(-1, dp(58), Gravity.TOP));
 
-        LinearLayout fine = new LinearLayout(this);
-        fine.setGravity(Gravity.CENTER);
-        addAdjust(fine, "-10", -10);
-        addAdjust(fine, "-1", -1);
-        Button hold = new Button(this);
-        hold.setText("HOLD");
-        hold.setOnClickListener(v -> { holdFrame = !holdFrame; hold.setText(holdFrame ? "RESUME" : "HOLD"); });
-        fine.addView(hold);
-        addAdjust(fine, "+1", 1);
-        addAdjust(fine, "+10", 10);
-        root.addView(fine);
+        TextView crosshair = new TextView(this);
+        crosshair.setText("+");
+        crosshair.setTextColor(0x88FFFFFF);
+        crosshair.setTextSize(34);
+        crosshair.setGravity(Gravity.CENTER);
+        root.addView(crosshair, new FrameLayout.LayoutParams(dp(70), dp(70), Gravity.CENTER));
+
+        LinearLayout panel = new LinearLayout(this);
+        panel.setOrientation(LinearLayout.VERTICAL);
+        panel.setGravity(Gravity.CENTER_HORIZONTAL);
+        panel.setPadding(dp(12), dp(8), dp(12), dp(10));
+        panel.setBackground(round(0xE6000000, dp(24)));
+
+        LinearLayout readout = new LinearLayout(this);
+        readout.setGravity(Gravity.CENTER | Gravity.BOTTOM);
+        rpmText = new TextView(this);
+        rpmText.setTextColor(Color.WHITE);
+        rpmText.setTextSize(44);
+        rpmText.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
+        rpmText.setGravity(Gravity.CENTER);
+        readout.addView(rpmText, new LinearLayout.LayoutParams(-2, dp(58)));
+
+        TextView unit = new TextView(this);
+        unit.setText(" RPM");
+        unit.setTextColor(Color.LTGRAY);
+        unit.setTextSize(14);
+        unit.setGravity(Gravity.BOTTOM);
+        unit.setPadding(0, 0, 0, dp(9));
+        readout.addView(unit, new LinearLayout.LayoutParams(-2, dp(58)));
+        panel.addView(readout, new LinearLayout.LayoutParams(-1, dp(60)));
+
+        hzText = new TextView(this);
+        hzText.setTextColor(Color.LTGRAY);
+        hzText.setTextSize(13);
+        hzText.setGravity(Gravity.CENTER);
+        panel.addView(hzText, new LinearLayout.LayoutParams(-1, dp(24)));
+
+        LinearLayout adjust = new LinearLayout(this);
+        adjust.setGravity(Gravity.CENTER);
+        addColumn(adjust, "+100", -100, "+", 100);
+        addColumn(adjust, "+10", -10, "+", 10);
+        addColumn(adjust, "+1", -1, "+", 1);
+        addColumn(adjust, "x2", 0, "x", 2);
+        panel.addView(adjust, new LinearLayout.LayoutParams(-1, dp(120)));
+
+        LinearLayout actions = new LinearLayout(this);
+        actions.setGravity(Gravity.CENTER);
+
+        Button half = action("/2");
+        half.setOnClickListener(v -> setFpm(Math.max(30, fpm / 2)));
+        actions.addView(half, actionParams());
+
+        holdButton = action("II");
+        holdButton.setTextSize(22);
+        holdButton.setOnClickListener(v -> {
+            holdFrame = !holdFrame;
+            holdButton.setText(holdFrame ? ">" : "II");
+        });
+        actions.addView(holdButton, actionParams());
+
+        Button reset = action("750");
+        reset.setTextSize(13);
+        reset.setOnClickListener(v -> setFpm(750));
+        actions.addView(reset, actionParams());
+
+        Button doubleRate = action("x2");
+        doubleRate.setTextSize(14);
+        doubleRate.setOnClickListener(v -> setFpm(fpm * 2));
+        actions.addView(doubleRate, actionParams());
+
+        panel.addView(actions, new LinearLayout.LayoutParams(-1, dp(64)));
+
+        TextView hint = new TextView(this);
+        hint.setText("Adjust until the moving part appears stationary");
+        hint.setTextColor(Color.GRAY);
+        hint.setTextSize(12);
+        hint.setGravity(Gravity.CENTER);
+        panel.addView(hint, new LinearLayout.LayoutParams(-1, dp(28)));
+
+        FrameLayout.LayoutParams panelParams = new FrameLayout.LayoutParams(-1, dp(300), Gravity.BOTTOM);
+        panelParams.setMargins(dp(10), 0, dp(10), dp(10));
+        root.addView(panel, panelParams);
 
         setContentView(root);
         updateRateText();
     }
 
-    private void addAdjust(LinearLayout parent, String label, int amount) {
+    private void addColumn(LinearLayout row, String topLabel, int minus, String plusLabel, int plus) {
+        LinearLayout col = new LinearLayout(this);
+        col.setOrientation(LinearLayout.VERTICAL);
+        col.setGravity(Gravity.CENTER);
+        row.addView(col, new LinearLayout.LayoutParams(0, -1, 1f));
+
+        Button up = smallButton(topLabel);
+        if (topLabel.equals("x2")) up.setOnClickListener(v -> setFpm(fpm * 2));
+        else up.setOnClickListener(v -> setFpm(fpm + plus));
+        col.addView(up, smallParams());
+
+        Button down = smallButton(minus == 0 ? "/2" : String.valueOf(minus));
+        if (minus == 0) down.setOnClickListener(v -> setFpm(Math.max(30, fpm / 2)));
+        else down.setOnClickListener(v -> setFpm(fpm + minus));
+        col.addView(down, smallParams());
+    }
+
+    private Button smallButton(String text) {
         Button b = new Button(this);
-        b.setText(label);
-        b.setOnClickListener(v -> setFpm(fpm + amount));
-        parent.addView(b);
+        b.setText(text);
+        b.setTextColor(Color.WHITE);
+        b.setTextSize(17);
+        b.setAllCaps(false);
+        b.setPadding(0, 0, 0, 0);
+        b.setBackground(round(0xAA333333, dp(18)));
+        return b;
+    }
+
+    private LinearLayout.LayoutParams smallParams() {
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(dp(68), dp(48));
+        p.setMargins(dp(4), dp(3), dp(4), dp(3));
+        return p;
+    }
+
+    private Button action(String text) {
+        Button b = new Button(this);
+        b.setText(text);
+        b.setTextColor(Color.WHITE);
+        b.setTextSize(18);
+        b.setAllCaps(false);
+        b.setPadding(0, 0, 0, 0);
+        b.setBackground(round(0xDD292929, dp(28)));
+        return b;
+    }
+
+    private LinearLayout.LayoutParams actionParams() {
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(dp(56), dp(56));
+        p.setMargins(dp(8), 0, dp(8), 0);
+        return p;
+    }
+
+    private GradientDrawable round(int color, int radius) {
+        GradientDrawable d = new GradientDrawable();
+        d.setColor(color);
+        d.setCornerRadius(radius);
+        return d;
+    }
+
+    private int dp(int v) {
+        return Math.round(v * getResources().getDisplayMetrics().density);
     }
 
     private void setFpm(int newFpm) {
@@ -109,14 +236,14 @@ public class MainActivity extends Activity {
 
     private void updateRateText() {
         double hz = fpm / 60.0;
-        rateText.setText("Machine Freeze Cam   " + fpm + " FPM   " + String.format("%.2f Hz", hz));
+        rpmText.setText(String.valueOf(fpm));
+        hzText.setText(String.format(Locale.US, "%.2f Hz   -   %.2f ms/frame", hz, 1000.0 / hz));
     }
 
     private void startCamera() {
         cameraThread = new HandlerThread("camera");
         cameraThread.start();
         cameraHandler = new Handler(cameraThread.getLooper());
-
         CameraManager manager = (CameraManager) getSystemService(CAMERA_SERVICE);
         try {
             String selected = null;
@@ -139,7 +266,6 @@ public class MainActivity extends Activity {
                     }
                 } finally { image.close(); }
             }, cameraHandler);
-
             manager.openCamera(selected, new CameraDevice.StateCallback() {
                 @Override public void onOpened(CameraDevice camera) { cameraDevice = camera; createSession(); }
                 @Override public void onDisconnected(CameraDevice camera) { camera.close(); }
