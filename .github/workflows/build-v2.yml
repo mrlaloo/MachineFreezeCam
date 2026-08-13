@@ -1,0 +1,84 @@
+name: Build APK v2
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+      - name: Apply portrait and UI fixes
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('app/src/main/java/com/mrlaloo/machinefreezecam/MainActivity.java')
+          s = p.read_text()
+          s = s.replace('import android.graphics.ImageFormat;\n', 'import android.graphics.ImageFormat;\nimport android.graphics.Insets;\nimport android.graphics.Matrix;\n')
+          s = s.replace('import android.os.Bundle;\n', 'import android.os.Build;\nimport android.os.Bundle;\n')
+          s = s.replace('import android.view.Surface;\n', 'import android.view.Surface;\nimport android.view.WindowInsets;\n')
+          s = s.replace('private Handler cameraHandler;\n', 'private Handler cameraHandler;\n    private int sensorRotationDegrees = 90;\n')
+          s = s.replace('root.setPadding(12, 12, 12, 12);', '''final int basePad = 12;
+        root.setPadding(basePad, basePad, basePad, basePad);
+        root.setOnApplyWindowInsetsListener((v, insets) -> {
+            int left, top, right, bottom;
+            if (Build.VERSION.SDK_INT >= 30) {
+                Insets bars = insets.getInsets(WindowInsets.Type.systemBars());
+                left = bars.left; top = bars.top; right = bars.right; bottom = bars.bottom;
+            } else {
+                left = insets.getSystemWindowInsetLeft(); top = insets.getSystemWindowInsetTop();
+                right = insets.getSystemWindowInsetRight(); bottom = insets.getSystemWindowInsetBottom();
+            }
+            v.setPadding(basePad + left, basePad + top, basePad + right, basePad + bottom);
+            return insets;
+        });''')
+          s = s.replace('presets.addView(b);', 'presets.addView(b, buttonParams());')
+          s = s.replace('fine.addView(hold);', 'fine.addView(hold, buttonParams());')
+          s = s.replace('parent.addView(b);', 'parent.addView(b, buttonParams());')
+          s = s.replace('    private void addAdjust(LinearLayout parent, String label, int amount) {', '''    private LinearLayout.LayoutParams buttonParams() {
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, 64, 1f);
+        lp.setMargins(3, 3, 3, 3);
+        return lp;
+    }
+
+    private void addAdjust(LinearLayout parent, String label, int amount) {''')
+          s = s.replace('if (facing != null && facing == CameraCharacteristics.LENS_FACING_BACK) { selected = id; break; }', '''if (facing != null && facing == CameraCharacteristics.LENS_FACING_BACK) {
+                    selected = id;
+                    Integer orientation = manager.getCameraCharacteristics(id).get(CameraCharacteristics.SENSOR_ORIENTATION);
+                    if (orientation != null) sensorRotationDegrees = orientation;
+                    break;
+                }''')
+          s = s.replace('if (bmp != null) runOnUiThread(() -> imageView.setImageBitmap(bmp));', '''if (bmp != null) {
+                            Bitmap display = rotateForPortrait(bmp);
+                            runOnUiThread(() -> imageView.setImageBitmap(display));
+                        }''')
+          marker = '    private void createSession() {'
+          helper = '''    private Bitmap rotateForPortrait(Bitmap source) {
+        if (source == null || sensorRotationDegrees == 0) return source;
+        Matrix matrix = new Matrix();
+        matrix.postRotate(sensorRotationDegrees);
+        Bitmap rotated = Bitmap.createBitmap(source, 0, 0, source.getWidth(), source.getHeight(), matrix, true);
+        if (rotated != source) source.recycle();
+        return rotated;
+    }
+
+'''
+          s = s.replace(marker, helper + marker)
+          p.write_text(s)
+          PY
+      - name: Build debug APK
+        run: gradle assembleDebug --stacktrace
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MachineFreezeCam-v2-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
