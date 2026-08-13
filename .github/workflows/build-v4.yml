@@ -1,0 +1,78 @@
+name: Build APK v4
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+      - name: Apply big-button UI and portrait fixes
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('app/src/main/java/com/mrlaloo/machinefreezecam/MainActivity.java')
+          s = p.read_text()
+          s = s.replace('import android.graphics.ImageFormat;\n', 'import android.graphics.ImageFormat;\nimport android.graphics.Insets;\nimport android.graphics.Matrix;\nimport android.graphics.Color;\n')
+          s = s.replace('import android.os.Bundle;\n', 'import android.os.Build;\nimport android.os.Bundle;\n')
+          s = s.replace('import android.view.Surface;\n', 'import android.view.Surface;\nimport android.view.WindowInsets;\n')
+          s = s.replace('private Handler cameraHandler;\n', 'private Handler cameraHandler;\n    private int sensorRotationDegrees = 90;\n')
+          s = s.replace('root.setPadding(12, 12, 12, 12);', 'final int basePad = dp(6);\n        root.setPadding(basePad, basePad, basePad, basePad);\n        root.setOnApplyWindowInsetsListener((v, insets) -> {\n            int left, top, right, bottom;\n            if (Build.VERSION.SDK_INT >= 30) {\n                Insets bars = insets.getInsets(WindowInsets.Type.systemBars());\n                left = bars.left; top = bars.top; right = bars.right; bottom = bars.bottom;\n            } else {\n                left = insets.getSystemWindowInsetLeft(); top = insets.getSystemWindowInsetTop();\n                right = insets.getSystemWindowInsetRight(); bottom = insets.getSystemWindowInsetBottom();\n            }\n            v.setPadding(basePad + left, basePad + top, basePad + right, basePad + bottom);\n            return insets;\n        });')
+          s = s.replace('rateText.setTextSize(24);', 'rateText.setTextSize(22);')
+          s = s.replace('b.setText(String.valueOf(p));', 'b.setText(String.valueOf(p));\n            styleButton(b, 22);')
+          s = s.replace('hold.setText("HOLD");', 'hold.setText("HOLD");\n        styleButton(hold, 20);')
+          s = s.replace('b.setText(label);', 'b.setText(label);\n        styleButton(b, 20);')
+          s = s.replace('presets.addView(b);', 'presets.addView(b, buttonParams());')
+          s = s.replace('fine.addView(hold);', 'fine.addView(hold, buttonParams());')
+          s = s.replace('parent.addView(b);', 'parent.addView(b, buttonParams());')
+          s = s.replace('    private void addAdjust(LinearLayout parent, String label, int amount) {', '''    private int dp(int value) {
+        return Math.round(value * getResources().getDisplayMetrics().density);
+    }
+
+    private void styleButton(Button b, int sp) {
+        b.setTextColor(Color.WHITE);
+        b.setTextSize(sp);
+        b.setAllCaps(false);
+        b.setMinHeight(dp(68));
+        b.setPadding(dp(2), 0, dp(2), 0);
+    }
+
+    private LinearLayout.LayoutParams buttonParams() {
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, dp(72), 1f);
+        lp.setMargins(dp(3), dp(3), dp(3), dp(3));
+        return lp;
+    }
+
+    private void addAdjust(LinearLayout parent, String label, int amount) {''')
+          s = s.replace('if (facing != null && facing == CameraCharacteristics.LENS_FACING_BACK) { selected = id; break; }', 'if (facing != null && facing == CameraCharacteristics.LENS_FACING_BACK) {\n                    selected = id;\n                    Integer orientation = manager.getCameraCharacteristics(id).get(CameraCharacteristics.SENSOR_ORIENTATION);\n                    if (orientation != null) sensorRotationDegrees = orientation;\n                    break;\n                }')
+          s = s.replace('if (bmp != null) runOnUiThread(() -> imageView.setImageBitmap(bmp));', 'if (bmp != null) {\n                            Bitmap display = rotateForPortrait(bmp);\n                            runOnUiThread(() -> imageView.setImageBitmap(display));\n                        }')
+          helper = '''    private Bitmap rotateForPortrait(Bitmap source) {
+        if (source == null || sensorRotationDegrees == 0) return source;
+        Matrix matrix = new Matrix();
+        matrix.postRotate(sensorRotationDegrees);
+        Bitmap rotated = Bitmap.createBitmap(source, 0, 0, source.getWidth(), source.getHeight(), matrix, true);
+        if (rotated != source) source.recycle();
+        return rotated;
+    }
+
+'''
+          s = s.replace('    private void createSession() {', helper + '    private void createSession() {')
+          p.write_text(s)
+          PY
+      - name: Build debug APK
+        run: gradle assembleDebug --stacktrace
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MachineFreezeCam-v4-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
