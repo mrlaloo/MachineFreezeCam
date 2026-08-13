@@ -17,16 +17,16 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
-      - name: Make test app install alongside original
+      - name: Make V3 install alongside original
         run: |
           sed -i "s/applicationId 'com.mrlaloo.machinefreezecam'/applicationId 'com.mrlaloo.videotachometer'/" app/build.gradle
-          sed -i "s/versionCode 1/versionCode 2/" app/build.gradle
-          sed -i "s/versionName '1.0'/versionName '2.0-test'/" app/build.gradle
-          sed -i 's/android:label="Machine Freeze Cam"/android:label="Video Tachometer"/' app/src/main/AndroidManifest.xml
+          sed -i "s/versionCode 1/versionCode 3/" app/build.gradle
+          sed -i "s/versionName '1.0'/versionName '3.0-test'/" app/build.gradle
+          sed -i 's/android:label="Machine Freeze Cam"/android:label="Video Tachometer V3"/' app/src/main/AndroidManifest.xml
       - name: Build debug APK
         run: gradle assembleDebug --stacktrace
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: VideoTachometer-Android
+          name: VideoTachometer-Android-V3
           path: app/build/outputs/apk/debug/app-debug.apk
