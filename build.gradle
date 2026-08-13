@@ -1,0 +1,16 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.mrlaloo.machinefreezecam'
+    compileSdk 36
+
+    defaultConfig {
+        applicationId 'com.mrlaloo.machinefreezecam'
+        minSdk 26
+        targetSdk 36
+        versionCode 1
+        versionName '1.0'
+    }
+}
