@@ -2,6 +2,7 @@ package com.mrlaloo.machinefreezecam;
 
 import android.Manifest;
 import android.app.Activity;
+import android.content.ContentValues;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
@@ -16,9 +17,15 @@ import android.hardware.camera2.CameraManager;
 import android.hardware.camera2.CaptureRequest;
 import android.media.Image;
 import android.media.ImageReader;
+import android.media.MediaRecorder;
+import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
+import android.os.Environment;
 import android.os.Handler;
 import android.os.HandlerThread;
+import android.os.ParcelFileDescriptor;
+import android.provider.MediaStore;
 import android.view.Gravity;
 import android.view.Surface;
 import android.widget.Button;
@@ -28,21 +35,33 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileDescriptor;
 import java.nio.ByteBuffer;
-import java.util.Arrays;
+import java.text.SimpleDateFormat;
+import java.util.ArrayList;
+import java.util.Date;
+import java.util.List;
+import java.util.Locale;
 
 public class MainActivity extends Activity {
     private static final int CAMERA_PERMISSION = 10;
     private ImageView imageView;
     private TextView rateText;
+    private Button recordButton;
     private int fpm = 750;
     private volatile long lastShownNs = 0;
     private volatile boolean holdFrame = false;
+    private volatile boolean recording = false;
     private CameraDevice cameraDevice;
     private CameraCaptureSession captureSession;
     private ImageReader imageReader;
     private HandlerThread cameraThread;
     private Handler cameraHandler;
+    private MediaRecorder mediaRecorder;
+    private Surface recorderSurface;
+    private Uri recordingUri;
+    private ParcelFileDescriptor recordingFd;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -91,6 +110,13 @@ public class MainActivity extends Activity {
         addAdjust(fine, "+10", 10);
         root.addView(fine);
 
+        recordButton = new Button(this);
+        recordButton.setText("RECORD VIDEO");
+        recordButton.setOnClickListener(v -> {
+            if (recording) stopRecording(); else startRecording();
+        });
+        root.addView(recordButton, new LinearLayout.LayoutParams(-1, -2));
+
         setContentView(root);
         updateRateText();
     }
@@ -109,7 +135,8 @@ public class MainActivity extends Activity {
 
     private void updateRateText() {
         double hz = fpm / 60.0;
-        rateText.setText("Machine Freeze Cam   " + fpm + " FPM   " + String.format("%.2f Hz", hz));
+        String suffix = recording ? "   REC" : "";
+        rateText.setText("Machine Freeze Cam   " + fpm + " FPM   " + String.format(Locale.US, "%.2f Hz", hz) + suffix);
     }
 
     private void startCamera() {
@@ -141,7 +168,7 @@ public class MainActivity extends Activity {
             }, cameraHandler);
 
             manager.openCamera(selected, new CameraDevice.StateCallback() {
-                @Override public void onOpened(CameraDevice camera) { cameraDevice = camera; createSession(); }
+                @Override public void onOpened(CameraDevice camera) { cameraDevice = camera; createSession(false); }
                 @Override public void onDisconnected(CameraDevice camera) { camera.close(); }
                 @Override public void onError(CameraDevice camera, int error) { camera.close(); }
             }, cameraHandler);
@@ -150,22 +177,147 @@ public class MainActivity extends Activity {
         }
     }
 
-    private void createSession() {
+    private void createSession(boolean startRecorderWhenReady) {
+        if (cameraDevice == null || imageReader == null) return;
         try {
-            Surface surface = imageReader.getSurface();
-            cameraDevice.createCaptureSession(Arrays.asList(surface), new CameraCaptureSession.StateCallback() {
+            if (captureSession != null) {
+                captureSession.close();
+                captureSession = null;
+            }
+            Surface previewSurface = imageReader.getSurface();
+            List<Surface> surfaces = new ArrayList<>();
+            surfaces.add(previewSurface);
+            if (recording && recorderSurface != null) surfaces.add(recorderSurface);
+
+            cameraDevice.createCaptureSession(surfaces, new CameraCaptureSession.StateCallback() {
                 @Override public void onConfigured(CameraCaptureSession session) {
                     captureSession = session;
                     try {
-                        CaptureRequest.Builder builder = cameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW);
-                        builder.addTarget(surface);
+                        CaptureRequest.Builder builder = cameraDevice.createCaptureRequest(
+                                recording ? CameraDevice.TEMPLATE_RECORD : CameraDevice.TEMPLATE_PREVIEW);
+                        builder.addTarget(previewSurface);
+                        if (recording && recorderSurface != null) builder.addTarget(recorderSurface);
                         builder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO);
                         session.setRepeatingRequest(builder.build(), null, cameraHandler);
-                    } catch (CameraAccessException ignored) {}
+                        if (startRecorderWhenReady && recording && mediaRecorder != null) {
+                            mediaRecorder.start();
+                            runOnUiThread(() -> {
+                                recordButton.setText("STOP & SAVE");
+                                updateRateText();
+                                Toast.makeText(MainActivity.this, "Recording started", Toast.LENGTH_SHORT).show();
+                            });
+                        }
+                    } catch (Exception e) {
+                        recordingFailed(e);
+                    }
                 }
-                @Override public void onConfigureFailed(CameraCaptureSession session) {}
+                @Override public void onConfigureFailed(CameraCaptureSession session) {
+                    recordingFailed(new Exception("Camera session configuration failed"));
+                }
             }, cameraHandler);
-        } catch (CameraAccessException ignored) {}
+        } catch (CameraAccessException e) {
+            recordingFailed(e);
+        }
+    }
+
+    private void startRecording() {
+        if (cameraDevice == null || recording) return;
+        try {
+            String stamp = new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(new Date());
+            String fileName = "MachineFreezeCam_" + stamp + ".mp4";
+
+            mediaRecorder = new MediaRecorder();
+            mediaRecorder.setVideoSource(MediaRecorder.VideoSource.SURFACE);
+            mediaRecorder.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4);
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                ContentValues values = new ContentValues();
+                values.put(MediaStore.Video.Media.DISPLAY_NAME, fileName);
+                values.put(MediaStore.Video.Media.MIME_TYPE, "video/mp4");
+                values.put(MediaStore.Video.Media.RELATIVE_PATH, Environment.DIRECTORY_MOVIES + "/MachineFreezeCam");
+                values.put(MediaStore.Video.Media.IS_PENDING, 1);
+                recordingUri = getContentResolver().insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, values);
+                if (recordingUri == null) throw new Exception("Could not create video file");
+                recordingFd = getContentResolver().openFileDescriptor(recordingUri, "w");
+                if (recordingFd == null) throw new Exception("Could not open video file");
+                FileDescriptor fd = recordingFd.getFileDescriptor();
+                mediaRecorder.setOutputFile(fd);
+            } else {
+                File dir = new File(getExternalFilesDir(Environment.DIRECTORY_MOVIES), "MachineFreezeCam");
+                if (!dir.exists() && !dir.mkdirs()) throw new Exception("Could not create video folder");
+                mediaRecorder.setOutputFile(new File(dir, fileName).getAbsolutePath());
+            }
+
+            mediaRecorder.setVideoEncoder(MediaRecorder.VideoEncoder.H264);
+            mediaRecorder.setVideoSize(640, 480);
+            mediaRecorder.setVideoFrameRate(30);
+            mediaRecorder.setVideoEncodingBitRate(5_000_000);
+            mediaRecorder.prepare();
+            recorderSurface = mediaRecorder.getSurface();
+            recording = true;
+            recordButton.setEnabled(false);
+            createSession(true);
+            recordButton.postDelayed(() -> recordButton.setEnabled(true), 1000);
+        } catch (Exception e) {
+            recordingFailed(e);
+        }
+    }
+
+    private void stopRecording() {
+        if (!recording) return;
+        recording = false;
+        try {
+            if (captureSession != null) captureSession.stopRepeating();
+        } catch (Exception ignored) {}
+        try {
+            if (mediaRecorder != null) mediaRecorder.stop();
+        } catch (Exception e) {
+            if (recordingUri != null) getContentResolver().delete(recordingUri, null, null);
+        }
+        releaseRecorder();
+        finalizeMediaStoreVideo();
+        recordButton.setText("RECORD VIDEO");
+        updateRateText();
+        Toast.makeText(this, "Video saved to Movies/MachineFreezeCam", Toast.LENGTH_LONG).show();
+        createSession(false);
+    }
+
+    private void finalizeMediaStoreVideo() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && recordingUri != null) {
+            ContentValues values = new ContentValues();
+            values.put(MediaStore.Video.Media.IS_PENDING, 0);
+            getContentResolver().update(recordingUri, values, null, null);
+        }
+        recordingUri = null;
+    }
+
+    private void releaseRecorder() {
+        try { if (recordingFd != null) recordingFd.close(); } catch (Exception ignored) {}
+        recordingFd = null;
+        recorderSurface = null;
+        if (mediaRecorder != null) {
+            try { mediaRecorder.reset(); } catch (Exception ignored) {}
+            try { mediaRecorder.release(); } catch (Exception ignored) {}
+            mediaRecorder = null;
+        }
+    }
+
+    private void recordingFailed(Exception e) {
+        recording = false;
+        releaseRecorder();
+        if (recordingUri != null) {
+            try { getContentResolver().delete(recordingUri, null, null); } catch (Exception ignored) {}
+            recordingUri = null;
+        }
+        runOnUiThread(() -> {
+            if (recordButton != null) {
+                recordButton.setEnabled(true);
+                recordButton.setText("RECORD VIDEO");
+            }
+            updateRateText();
+            Toast.makeText(MainActivity.this, "Recording error: " + e.getMessage(), Toast.LENGTH_LONG).show();
+        });
+        if (cameraDevice != null && imageReader != null) createSession(false);
     }
 
     private Bitmap imageToBitmap(Image image) {
@@ -213,6 +365,7 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        if (recording) stopRecording();
         super.onDestroy();
         if (captureSession != null) captureSession.close();
         if (cameraDevice != null) cameraDevice.close();
