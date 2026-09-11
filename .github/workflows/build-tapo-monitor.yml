@@ -1,0 +1,57 @@
+name: Build Tapo Monitor reconnect fix
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ tapo-monitor-reconnect-fix ]
+    paths:
+      - 'tapo-monitor/**'
+      - '.github/workflows/build-tapo-monitor.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    if: github.event_name == 'workflow_dispatch' || !contains(github.event.head_commit.message, '[skip tapo build]')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: tapo-monitor-reconnect-fix
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Build debug APK
+        working-directory: tapo-monitor
+        run: gradle assembleDebug --stacktrace
+
+      - name: Stage APK
+        shell: bash
+        run: |
+          mkdir -p tapo-monitor/releases
+          cp tapo-monitor/app/build/outputs/apk/debug/app-debug.apk tapo-monitor/releases/TapoMonitor-v1.1-reconnect.apk
+          sha256sum tapo-monitor/releases/TapoMonitor-v1.1-reconnect.apk > tapo-monitor/releases/TapoMonitor-v1.1-reconnect.sha256
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TapoMonitor-v1.1-reconnect
+          path: tapo-monitor/releases/TapoMonitor-v1.1-reconnect.apk
+
+      - name: Publish APK to branch
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add tapo-monitor/releases/TapoMonitor-v1.1-reconnect.apk tapo-monitor/releases/TapoMonitor-v1.1-reconnect.sha256
+          if ! git diff --cached --quiet; then
+            git commit -m 'Publish Tapo Monitor v1.1 reconnect APK [skip tapo build]'
+            git push origin HEAD:tapo-monitor-reconnect-fix
+          fi
